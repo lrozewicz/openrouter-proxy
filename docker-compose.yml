@@ -1,0 +1,105 @@
+# openrouter-proxy – stack dla Docker Swarm / Portainer (Stacks -> Add stack -> Web editor)
+#
+# Przed wdrożeniem utwórz w Portainerze (Secrets -> Add secret):
+#   openrouter_api_key         – klucz OpenRouter (sk-or-...)
+#   openrouter_proxy_api_keys  – klucze, którymi klienci (np. OpenCode) logują się do proxy, jeden na linię
+#
+# Konfiguracja routingu jest niżej w ORPROXY_CONFIG_YAML – zmieniasz ją tutaj i robisz "Update the stack".
+# Uwaga: w treści konfiguracji nie używaj znaku dolara (compose traktuje go jako zmienną).
+
+services:
+  openrouter-proxy:
+    image: ghcr.io/lrozewicz/openrouter-proxy:latest
+    secrets:
+      - openrouter_api_key
+      - openrouter_proxy_api_keys
+    environment:
+      ORPROXY_CONFIG_YAML: |
+        server:
+          host: 0.0.0.0
+          port: 8080
+          log_level: info
+
+        openrouter:
+          base_url: https://openrouter.ai/api/v1
+          api_key_file: /run/secrets/openrouter_api_key
+          app_title: openrouter-proxy
+          http_referer: https://openrouter-proxy.lucaswebart.com
+          request_timeout: 10m
+
+        auth:
+          api_keys_file: /run/secrets/openrouter_proxy_api_keys
+          allow_anonymous: false
+
+        passthrough_unknown_models: true
+        chars_per_token: 3.5
+
+        defaults:
+          refresh_interval: 15m          # 30s, 5m, 15m, 1h, 6h ...
+          metrics_percentile: p50        # p50 | p75 | p90 | p99
+          uptime_window: 1d              # 5m | 30m | 1d
+          throughput_source: auto        # openrouter | measured | auto
+          expected_cache_hit_rate: 0.5
+          min_cache_samples: 5
+          blend_output_share: 0.1
+          tolerance: 0.05
+          exclude_unhealthy: true
+          routing:
+            max_providers: 3
+            allow_fallbacks: true
+            on_no_match: best_effort     # best_effort | openrouter | error
+            sticky_ttl: 1h
+
+        models:
+          - name: deepseek-v4-flash
+            model: deepseek/deepseek-v4-flash-0731
+            refresh_interval: 5m
+            filters:
+              min_throughput: 40           # tok/s
+              max_latency: 3000            # ms
+              max_input_price: 0.20        # USD / 1M tokenów
+              max_output_price: 0.60       # USD / 1M tokenów
+              max_cache_read_price: 0.05   # USD / 1M tokenów
+              min_uptime: 98               # %
+              min_quantization: fp8
+              allow_unknown_quantization: true
+              require_cache: true
+              zdr_only: false
+              strict_metrics: false
+              # exclude_providers: [mancer]
+            priority:
+              - { by: blended_price, tolerance: 0.15 }
+              - { by: throughput, tolerance: 0.2 }
+              - cache_hit_rate
+              - uptime
+            routing:
+              switch_below_context: 100k
+              above_context: sticky        # sticky | ranked | openrouter
+    networks:
+      - traefik-public
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+      update_config:
+        order: start-first
+      resources:
+        limits:
+          memory: 256M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=traefik-public"
+        - "traefik.http.routers.openrouter-proxy.rule=Host(`openrouter-proxy.lucaswebart.com`)"
+        - "traefik.http.routers.openrouter-proxy.entrypoints=websecure"
+        - "traefik.http.routers.openrouter-proxy.tls.certresolver=letsencrypt"
+        - "traefik.http.services.openrouter-proxy.loadbalancer.server.port=8080"
+
+secrets:
+  openrouter_api_key:
+    external: true
+  openrouter_proxy_api_keys:
+    external: true
+
+networks:
+  traefik-public:
+    external: true

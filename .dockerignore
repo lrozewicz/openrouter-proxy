@@ -1,0 +1,8 @@
+.env
+.git
+.github
+example
+tests
+prompt.md
+**/__pycache__
+*.pyc

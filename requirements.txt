@@ -1,0 +1,4 @@
+starlette==0.47.2
+uvicorn[standard]==0.35.0
+httpx==0.28.1
+pyyaml==6.0.2

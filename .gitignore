@@ -1,0 +1,6 @@
+.env
+prompt.md
+example/
+__pycache__/
+*.pyc
+.pytest_cache/

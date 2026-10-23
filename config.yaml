@@ -1,0 +1,84 @@
+# openrouter-proxy – konfiguracja (YAML; ten sam układ działa jako JSON, jeśli plik ma rozszerzenie .json)
+
+server:
+  host: 0.0.0.0
+  port: 8080
+  log_level: info
+
+openrouter:
+  base_url: https://openrouter.ai/api/v1
+  # klucz OpenRouter: z pliku (Docker/Portainer secret), ewentualnie zmienna OPENROUTER_API_KEY
+  api_key_file: /run/secrets/openrouter_api_key
+  app_title: openrouter-proxy
+  http_referer: https://openrouter-proxy.lucaswebart.com
+  request_timeout: 10m
+
+auth:
+  # klucze, którymi klienci (np. OpenCode) logują się do proxy; jeden na linię lub po przecinku
+  api_keys_file: /run/secrets/openrouter_proxy_api_keys
+  allow_anonymous: false
+
+# czy przepuszczać modele, których nie ma niżej (np. "anthropic/claude-sonnet-4.5") bez routingu
+passthrough_unknown_models: true
+# zgrubna estymacja tokenów z długości tekstu (bez tokenizera – szybko)
+chars_per_token: 3.5
+
+# wartości domyślne, scalane z każdym modelem (model może je nadpisać)
+defaults:
+  refresh_interval: 15m          # jak często pobierać statystyki providerów (30s, 5m, 15m, 1h, 6h …)
+  metrics_percentile: p50        # którego percentyla throughput/latency z OpenRouter użyć: p50|p75|p90|p99
+  uptime_window: 1d              # okno uptime: 5m | 30m | 1d
+  throughput_source: auto        # openrouter | measured (pomiar proxy) | auto (OpenRouter, a gdy brak – pomiar)
+  expected_cache_hit_rate: 0.5   # zakładany cache hit, dopóki proxy go nie zmierzy (dla effective_input_price)
+  min_cache_samples: 5           # ile pomiarów, zanim zmierzony cache hit zacznie się liczyć
+  blend_output_share: 0.1        # udział tokenów wyjściowych w blended_price (kodowanie ≈ 0.05–0.15)
+  tolerance: 0.05                # domyślna tolerancja remisu w priorytetach (5%)
+  exclude_unhealthy: true
+  routing:
+    max_providers: 3             # ilu najlepszych providerów trafia do provider.order
+    allow_fallbacks: true        # gdy wszyscy z order padną – kolejni, którzy przeszli filtry
+    on_no_match: best_effort     # gdy nikt nie przejdzie filtrów: best_effort | openrouter | error
+    sticky_ttl: 1h
+
+models:
+  - name: deepseek-v4-flash                   # nazwa modelu widoczna dla klienta
+    model: deepseek/deepseek-v4-flash-0731    # id w OpenRouter
+    refresh_interval: 5m
+
+    # co najmniej jeden filtr jest wymagany; pozostałe opcjonalne
+    filters:
+      min_throughput: 40           # tok/s
+      max_latency: 3000            # ms do pierwszego tokena
+      max_input_price: 0.20        # $ za 1M tokenów wejścia
+      max_output_price: 0.60       # $ za 1M tokenów wyjścia
+      max_cache_read_price: 0.05   # $ za 1M tokenów odczytu z cache
+      min_uptime: 98               # %
+      min_quantization: fp8        # odrzuca fp4/int4; kolejność: int4 < fp4 < fp6 < int8 < fp8 < bf16/fp16 < fp32
+      # quantizations: [fp8, bf16]   # alternatywnie: jawna lista dozwolonych
+      allow_unknown_quantization: true   # wielu providerów nie podaje kwantyzacji
+      require_cache: true          # provider musi wspierać prompt caching
+      # min_cache_hit_rate: 0.5    # zmierzony przez proxy cache hit (0–1)
+      # exclude_providers: [mancer]
+      # include_providers: [deepinfra, baidu]
+      zdr_only: false              # true = tylko endpointy Zero Data Retention (wymagane, gdy konto ma włączone ZDR)
+      strict_metrics: false        # true = brak danych o metryce (np. throughput) odrzuca providera
+
+    # hierarchia priorytetów: porównanie po kolei; providerzy w granicy `tolerance`
+    # od najlepszego na danym kryterium są remisem i rozstrzyga kolejne kryterium.
+    # Dostępne: effective_input_price, input_price, output_price, cache_read_price, blended_price,
+    #           throughput, latency, uptime, cache_hit_rate, quantization, discount, context_length
+    priority:
+      - { by: blended_price, tolerance: 0.15 }
+      - { by: throughput, tolerance: 0.2 }
+      - cache_hit_rate
+      - uptime
+
+    routing:
+      # automatyczne przełączanie na tańszego/szybszego providera tylko poniżej tego kontekstu;
+      # powyżej proxy trzyma się providera, którego używała ta sama sesja (cache!)
+      switch_below_context: 100k
+      above_context: sticky        # sticky | ranked (zawsze najlepszy) | openrouter (domyślny routing OR)
+
+    # dodatkowe pola dla obiektu `provider` w OpenRouter, np.:
+    # provider:
+    #   data_collection: deny
