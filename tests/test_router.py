@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from orproxy.catalog import Endpoint, ModelState
+from orproxy.catalog import Catalog, Endpoint, ModelState
 from orproxy.config import ConfigError, build_config, parse_duration, parse_tokens
 from orproxy.router import StickyStore, analyze_request, decide
 
@@ -130,3 +130,13 @@ def test_price_overrides():
     assert e.prices_for(1000, morning).input == pytest.approx(0.2)
     assert e.prices_for(1000, evening).input == pytest.approx(0.1)
     assert e.prices_for(300000, evening).output == pytest.approx(1.0)
+
+
+def test_resolve_openrouter_prefixed_alias():
+    cfg = build_config({"openrouter": {"api_key": "k"}, "auth": {"api_keys": ["t"]},
+                        "models": [{"name": "deepseek-v4-flash", "model": "deepseek/deepseek-v4-flash-0731",
+                                    "filters": {"min_uptime": 90}}]})
+    cat = Catalog(cfg, client=None)  # type: ignore[arg-type]
+    assert cat.resolve("deepseek-v4-flash") is cat.resolve("openrouter/deepseek-v4-flash") is not None
+    assert cat.resolve("openrouter/auto") is None
+    assert cat.resolve("openai/gpt-5-nano") is None

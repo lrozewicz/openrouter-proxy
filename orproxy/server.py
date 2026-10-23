@@ -131,7 +131,7 @@ class Proxy:
             except ValueError:
                 body = None
         if body is not None and isinstance(body.get("model"), str):
-            state = self.catalog.models.get(body["model"])
+            state = self.catalog.resolve(body["model"])
             if state is None and not self.cfg.passthrough_unknown_models:
                 return _error(404, f"model {body['model']!r} is not configured on this proxy", "invalid_request_error")
             if state is not None:

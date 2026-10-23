@@ -153,6 +153,15 @@ class Catalog:
         self._zdr_at = 0.0
         self._zdr_lock = asyncio.Lock()
 
+    def resolve(self, model: str) -> ModelState | None:
+        """Finds the configured alias for a requested model name. Clients such as LiteLLM's openrouter
+        provider keep the "openrouter/" prefix on names without an author part, so
+        "openrouter/deepseek-v4-flash" resolves to the alias "deepseek-v4-flash"."""
+        state = self.models.get(model)
+        if state is None and model.startswith("openrouter/"):
+            state = self.models.get(model[len("openrouter/"):])
+        return state
+
     async def _zdr_endpoints(self) -> set[tuple[str, str]]:
         async with self._zdr_lock:
             if time.time() - self._zdr_at > 300:
