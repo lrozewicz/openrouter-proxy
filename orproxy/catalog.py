@@ -16,6 +16,8 @@ from .config import Config, ModelConfig
 log = logging.getLogger("orproxy.catalog")
 
 PER_M = 1_000_000
+MIN_CALIBRATION_PROMPT = 1000
+MIN_CALIBRATION_SAMPLES = 3
 
 
 def _price(v: Any) -> float | None:
@@ -135,6 +137,18 @@ class ModelState:
     refreshed_at: float = 0.0
     last_error: str | None = None
     measured: dict[str, Measured] = field(default_factory=dict)  # key: provider_name
+    chars_per_token: Ewma = field(default_factory=Ewma)          # calibrated from real prompt_tokens
+
+    def estimate_ratio(self, default: float) -> float:
+        """Characters per token used to estimate prompt size; learned once a few real samples exist."""
+        if self.chars_per_token.samples >= MIN_CALIBRATION_SAMPLES and self.chars_per_token.value:
+            return self.chars_per_token.value
+        return default
+
+    def calibrate(self, chars: int, prompt_tokens: int) -> None:
+        # small prompts are dominated by the chat template overhead and would skew the ratio
+        if chars > 0 and prompt_tokens >= MIN_CALIBRATION_PROMPT:
+            self.chars_per_token.add(min(8.0, max(1.0, chars / prompt_tokens)), alpha=0.1)
 
     def measured_for(self, provider_name: str) -> Measured:
         m = self.measured.get(provider_name)
@@ -148,19 +162,26 @@ class Catalog:
         self.cfg = cfg
         self.client = client
         self.models: dict[str, ModelState] = {name: ModelState(mc) for name, mc in cfg.models.items()}
+        self._by_model_id: dict[str, ModelState] = {}
+        for s in self.models.values():
+            self._by_model_id.setdefault(s.cfg.model, s)
         self._tasks: list[asyncio.Task[None]] = []
         self._zdr: set[tuple[str, str]] = set()   # (model_id, tag)
         self._zdr_at = 0.0
         self._zdr_lock = asyncio.Lock()
 
     def resolve(self, model: str) -> ModelState | None:
-        """Finds the configured alias for a requested model name. Clients such as LiteLLM's openrouter
-        provider keep the "openrouter/" prefix on names without an author part, so
-        "openrouter/deepseek-v4-flash" resolves to the alias "deepseek-v4-flash"."""
-        state = self.models.get(model)
-        if state is None and model.startswith("openrouter/"):
-            state = self.models.get(model[len("openrouter/"):])
-        return state
+        """Finds the configured model for a requested name: the alias or the OpenRouter id
+        ("deepseek/deepseek-v4-flash-0731"), either one optionally prefixed with "openrouter/".
+        Clients such as LiteLLM keep that prefix on some names, e.g. "openrouter/deepseek-v4-flash"."""
+        names = [model]
+        if model.startswith("openrouter/"):
+            names.append(model[len("openrouter/"):])
+        for name in names:
+            state = self.models.get(name) or self._by_model_id.get(name)
+            if state is not None:
+                return state
+        return None
 
     async def _zdr_endpoints(self) -> set[tuple[str, str]]:
         async with self._zdr_lock:
