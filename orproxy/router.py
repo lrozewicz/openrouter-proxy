@@ -23,6 +23,7 @@ class RequestInfo:
     max_tokens: int
     required_params: set[str]
     session_key: str
+    chars: int = 0
 
 
 @dataclass
@@ -107,7 +108,7 @@ def analyze_request(body: dict[str, Any], chars_per_token: float, session_header
 
     max_tokens = body.get("max_completion_tokens") or body.get("max_tokens") or 0
     return RequestInfo(prompt_tokens, int(max_tokens) if isinstance(max_tokens, (int, float)) else 0,
-                       required, session_key)
+                       required, session_key, chars)
 
 
 def compute_features(ep: Endpoint, state: ModelState, prompt_tokens: int) -> dict[str, float | None]:

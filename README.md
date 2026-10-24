@@ -92,7 +92,8 @@ Modele spoza listy są przekazywane dalej bez zmian, jeśli `passthrough_unknown
 ## Endpointy
 
 - `POST /v1/chat/completions`, `/v1/completions` i każde inne `/v1/*` jest przekazywane do OpenRouter.
-  Routing jest wstrzykiwany, gdy `model` to alias z konfiguracji.
+  Routing jest wstrzykiwany, gdy `model` to alias z konfiguracji albo identyfikator OpenRouter skonfigurowanego
+  modelu (np. `deepseek/deepseek-v4-flash-0731`). Obie formy mogą mieć prefiks `openrouter/`.
 - `GET /v1/models` zwraca skonfigurowane aliasy.
 - `GET /status?tokens=50000` (wymaga klucza) pokazuje aktualny ranking, powód odrzucenia każdego
   providera, jego metryki i pomiary proxy. Parametr `tokens` symuluje rozmiar promptu.
@@ -158,8 +159,9 @@ Testy: `pip install pytest && pytest`.
 
 ## Ograniczenia
 
-- Liczba tokenów promptu jest szacowana z długości tekstu (`chars_per_token`, bez tokenizera). Wystarcza
-  to do progów kontekstu, ale nie jest dokładne.
+- Liczba tokenów promptu jest szacowana z długości tekstu, bez tokenizera. Proxy kalibruje współczynnik znaków
+  na token osobno dla każdego modelu, porównując szacunek z faktycznym `prompt_tokens` z odpowiedzi (prompty
+  od 1000 tokenów, po 3 próbkach). Do tego czasu używa `chars_per_token`. Aktualną wartość pokazuje `/status`.
 - Stan pomiarów (cache hit, tok/s) i sesje sticky są trzymane w pamięci i giną przy restarcie. Zbierają
   się ponownie w ciągu kilku zapytań. Uruchamiaj jedną replikę.
 - Inne ograniczenia konta OpenRouter (np. zablokowani providerzy, polityka `data_collection`) nie są

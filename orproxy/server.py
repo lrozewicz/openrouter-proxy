@@ -30,6 +30,9 @@ HOP_HEADERS = {"host", "content-length", "connection", "keep-alive", "transfer-e
                "x-session-id"}
 RESP_DROP = {"content-length", "content-encoding", "transfer-encoding", "connection", "keep-alive"}
 MIN_CACHE_PROMPT = 2048  # only requests this big say anything useful about cache behaviour
+# short or burst-delivered answers say nothing about generation speed
+MIN_TPS_COMPLETION = 100
+MIN_TPS_SECONDS = 0.5
 
 
 def _error(status: int, message: str, code: str = "proxy_error") -> JSONResponse:
@@ -95,6 +98,8 @@ class Proxy:
                 "refresh_interval_s": s.cfg.refresh_interval,
                 "last_error": s.last_error,
                 "assumed_prompt_tokens": tokens,
+                "chars_per_token": round(s.estimate_ratio(self.cfg.chars_per_token), 3),
+                "chars_per_token_samples": s.chars_per_token.samples,
                 "ranking": [c.ep.tag for c in passing],
                 "providers": [{
                     "rank": order.get(c.ep.tag),
@@ -135,7 +140,8 @@ class Proxy:
             if state is None and not self.cfg.passthrough_unknown_models:
                 return _error(404, f"model {body['model']!r} is not configured on this proxy", "invalid_request_error")
             if state is not None:
-                req_info = analyze_request(body, self.cfg.chars_per_token, request.headers.get("x-session-id"))
+                req_info = analyze_request(body, state.estimate_ratio(self.cfg.chars_per_token),
+                                           request.headers.get("x-session-id"))
                 try:
                     decision = decide(state, req_info, self.sticky)
                 except NoProviderError as exc:
@@ -192,6 +198,22 @@ def _measured_dict(state: ModelState, provider_name: str) -> dict[str, Any] | No
             "throughput": r(m.throughput.value), "ttft_ms": r(m.ttft_ms.value)}
 
 
+def _has_generated_token(chunk: Any) -> bool:
+    """True for the first SSE chunk that carries generated text, reasoning or a tool call
+    (the role-only opening chunk does not count)."""
+    if not isinstance(chunk, dict):
+        return False
+    for choice in chunk.get("choices") or []:
+        if not isinstance(choice, dict):
+            continue
+        delta = choice.get("delta") or {}
+        if delta.get("content") or delta.get("reasoning") or delta.get("reasoning_content") or delta.get("tool_calls"):
+            return True
+        if choice.get("text"):
+            return True
+    return False
+
+
 class Observation:
     """Relays the upstream response untouched while watching it for provider, usage and timing."""
 
@@ -233,14 +255,15 @@ class Observation:
         payload = line[5:].strip()
         if not payload or payload == b"[DONE]":
             return
-        if self.first_token is None:
-            self.first_token = time.monotonic()
-        if self.provider is not None and b'"usage"' not in payload and b'"error"' not in payload:
+        if self.first_token is not None and self.provider is not None \
+                and b'"usage"' not in payload and b'"error"' not in payload:
             return
         try:
             data = json.loads(payload)
         except ValueError:
             return
+        if self.first_token is None and _has_generated_token(data):
+            self.first_token = time.monotonic()
         self._absorb(data)
 
     def _json_body(self, raw: bytes) -> None:
@@ -279,9 +302,11 @@ class Observation:
             if ok and self.first_token is not None:
                 m.ttft_ms.add((self.first_token - self.t0) * 1000)
                 gen_time = end - self.first_token
-                if completion >= 20 and gen_time > 0.05:
+                if completion >= MIN_TPS_COMPLETION and gen_time >= MIN_TPS_SECONDS:
                     tps = completion / gen_time
                     m.throughput.add(tps)
+            if ok:
+                self.state.calibrate(self.req.chars, prompt)
             if ok and self.is_continuation and prompt >= MIN_CACHE_PROMPT:
                 m.cache_hit_rate.add(cached / prompt)
             tag = tag_for_provider(self.decision, self.provider)

@@ -140,3 +140,26 @@ def test_resolve_openrouter_prefixed_alias():
     assert cat.resolve("deepseek-v4-flash") is cat.resolve("openrouter/deepseek-v4-flash") is not None
     assert cat.resolve("openrouter/auto") is None
     assert cat.resolve("openai/gpt-5-nano") is None
+    # the full OpenRouter id gets the same routing as the alias
+    assert cat.resolve("deepseek/deepseek-v4-flash-0731") is cat.resolve("deepseek-v4-flash")
+    assert cat.resolve("openrouter/deepseek/deepseek-v4-flash-0731") is cat.resolve("deepseek-v4-flash")
+
+
+def test_chars_per_token_calibration():
+    s = ModelState(make_cfg())
+    assert s.estimate_ratio(3.5) == 3.5
+    s.calibrate(300, 100)            # too small to say anything: ignored
+    assert s.chars_per_token.samples == 0
+    for _ in range(3):
+        s.calibrate(20000, 10000)    # code-heavy prompt: 2 chars per token
+    assert s.estimate_ratio(3.5) == pytest.approx(2.0)
+    big = analyze_request({"messages": [{"role": "user", "content": "x" * 200000}]}, s.estimate_ratio(3.5), None)
+    assert big.prompt_tokens == pytest.approx(100000, rel=0.01)
+
+
+def test_first_generated_token_detection():
+    from orproxy.server import _has_generated_token
+    assert not _has_generated_token({"choices": [{"delta": {"role": "assistant", "content": ""}}]})
+    assert _has_generated_token({"choices": [{"delta": {"reasoning": "We"}}]})
+    assert _has_generated_token({"choices": [{"delta": {"tool_calls": [{"index": 0}]}}]})
+    assert _has_generated_token({"choices": [{"delta": {"content": "Hi"}}]})
