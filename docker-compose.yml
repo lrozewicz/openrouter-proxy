@@ -55,7 +55,7 @@ services:
             model: deepseek/deepseek-v4-flash-0731
             refresh_interval: 5m
             filters:
-              min_throughput: 40           # tok/s
+              min_throughput: 60           # tok/s
               max_latency: 3000            # ms
               max_input_price: 0.20        # USD / 1M tokenów
               max_output_price: 0.60       # USD / 1M tokenów

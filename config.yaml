@@ -47,7 +47,7 @@ models:
 
     # co najmniej jeden filtr jest wymagany; pozostałe opcjonalne
     filters:
-      min_throughput: 40           # tok/s
+      min_throughput: 60           # tok/s
       max_latency: 3000            # ms do pierwszego tokena
       max_input_price: 0.20        # $ za 1M tokenów wejścia
       max_output_price: 0.60       # $ za 1M tokenów wyjścia
